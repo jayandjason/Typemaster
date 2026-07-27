@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>键盘盲打大闯关</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a2e;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        canvas {
+            background-color: #16213e;
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* 让点击穿透到canvas */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud {
+            display: flex;
+            justify-content: space-between;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px black;
+        }
+
+        #start-screen, #level-end-screen, #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+            z-index: 10;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+            color: #e94560;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        h2 {
+            font-size: 32px;
+            color: #fff;
+            margin-bottom: 20px;
+        }
+
+        p {
+            font-size: 18px;
+            color: #ccc;
+            margin-bottom: 30px;
+            max-width: 600px;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        button {
+            padding: 15px 40px;
+            font-size: 24px;
+            background-color: #e94560;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.1s, background-color 0.2s;
+            box-shadow: 0 4px 15px rgba(233, 69, 96, 0.4);
+        }
+
+        button:hover {
+            background-color: #ff2e63;
+            transform: scale(1.05);
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        .stat-box {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #4cd137;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div id="ui-layer">
+            <div class="hud">
+                <span id="hud-level">Level: 1</span>
+                <span id="hud-score">Score: 0/100</span>
+                <span id="hud-missed">Missed: 0</span>
+            </div>
+        </div>
+
+        <!-- 开始界面 -->
+        <div id="start-screen">
+            <h1>Type Master</h1>
+            <p>字母将从上方随机掉落。<br>在字母触底前按下对应的键盘按键将其消除。<br>每关需成功击打100个字母，失误过多将导致通关失败。</p>
+            <button onclick="game.startLevel()">开始第 1 关</button>
+        </div>
+
+        <!-- 关卡结算界面 -->
+        <div id="level-end-screen" class="hidden">
+            <h2>关卡完成!</h2>
+            <div class="stat-box">
+                <div>本关准确率</div>
+                <div class="stat-value" id="level-accuracy">100%</div>
+            </div>
+            <p id="level-message">表现完美！准备好迎接更快的速度了吗？</p>
+            <button id="next-level-btn" onclick="game.nextLevel()">下一关</button>
+        </div>
+
+        <!-- 游戏结束界面 -->
+        <div id="game-over-screen" class="hidden">
+            <h1 style="color: #ff4757;">挑战失败</h1>
+            <div class="stat-box">
+                <div>最终准确率</div>
+                <div class="stat-value" id="final-accuracy">0%</div>
+            </div>
+            <p>准确率低于 90%，未能通过当前关卡。<br>不要气馁，多加练习再来挑战！</p>
+            <button onclick="game.restartGame()">重新开始</button>
+        </div>
+    </div>
+
+<script>
+/**
+ * 游戏配置与常量
+ */
+const CONFIG = {
+    canvasWidth: 800,
+    canvasHeight: 600,
+    keysPerLevel: 100, // 每关需要打对的字母数
+    maxLevels: 10,
+    baseSpeed: 1.5,    // 第1关基础速度
+    speedIncrement: 0.4, // 每关增加的速度
+    spawnRateBase: 60, // 基础生成间隔帧数
+    warningColor: '#ff4757', // 警告颜色
+    hitColor: '#2ed573',     // 击中颜色
+    keyPressColor: '#ffa502' // 按键按下颜色
+};
+
+// 键盘布局数据
+const KEYBOARD_LAYOUT = [
+    ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+    ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+    ['Z', 'X', 'C', 'V', 'B', 'N', 'M']
+];
+
+/**
+ * 粒子效果类 (用于爆炸)
+ */
+class Particle {
+    constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 3 + 1;
+        this.vx = Math.cos(angle) * speed;
+        this.vy = Math.sin(angle) * speed;
+        this.life = 1.0; // 生命值 1.0 -> 0
+        this.decay = Math.random() * 0.03 + 0.02;
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life -= this.decay;
+    }
+
+    draw(ctx) {
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+/**
+ * 下落字母类
+ */
+class FallingLetter {
+    constructor(char, speed) {
+        this.char = char;
+        this.x = Math.random() * (CONFIG.canvasWidth - 40) + 20;
+        this.y = -30;
+        this.speed = speed;
+        this.radius = 20;
+        this.markedForDeletion = false;
+        this.isExploding = false;
+    }
+
+    update() {
+        this.y += this.speed;
+    }
+
+    draw(ctx) {
+        if (this.isExploding) return;
+
+        // 计算距离底部的比例，用于变色提示
+        const distanceToBottom = CONFIG.canvasHeight - 150 - this.y; // 150是键盘区域大概高度
+        const totalDistance = CONFIG.canvasHeight - 150;
+        const ratio = distanceToBottom / totalDistance;
+
+        ctx.font = "bold 30px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        // 颜色变化逻辑：越靠近底部越红
+        let color = "#ffffff";
+        if (ratio < 0.3) {
+            color = CONFIG.warningColor;
+            // 添加发光效果
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = CONFIG.warningColor;
+        } else {
+            ctx.shadowBlur = 0;
+        }
+
+        ctx.fillStyle = color;
+        ctx.fillText(this.char, this.x, this.y);
+        
+        // 重置阴影
+        ctx.shadowBlur = 0;
+    }
+}
+
+/**
+ * 游戏主控制器
+ */
+class Game {
+    constructor() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        
+        this.level = 1;
+        this.score = 0; // 当前关卡正确数
+        this.missed = 0; // 当前关卡错误数
+        this.totalAttempts = 0; // 总尝试次数
+        
+        this.letters = [];
+        this.particles = [];
+        this.pressedKeys = {}; // 记录当前按下的键 { 'A': 10 frames }
+        
+        this.isRunning = false;
+        this.animationId = null;
+        this.spawnTimer = 0;
+        
+        // 绑定键盘事件
+        window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+        window.addEventListener('keyup', (e) => this.handleKeyUp(e));
+        
+        // 初始绘制背景
+        this.drawBackground();
+    }
+
+    startLevel() {
+        document.getElementById('start-screen').classList.add('hidden');
+        document.getElementById('level-end-screen').classList.add('hidden');
+        document.getElementById('game-over-screen').classList.add('hidden');
+        
+        this.levelData = {
+            level: this.level,
+            score: 0,
+            missed: 0,
+            totalAttempts: 0,
+            speed: CONFIG.baseSpeed + (this.level - 1) * CONFIG.speedIncrement,
+            spawnInterval: Math.max(20, CONFIG.spawnRateBase - (this.level * 2)) // 随关卡增加生成频率
+        };
+        
+        this.letters = [];
+        this.particles = [];
+        this.pressedKeys = {};
+        this.isRunning = true;
+        
+        this.updateHUD();
+        this.loop();
+    }
+
+    nextLevel() {
+        this.level++;
+        if (this.level > CONFIG.maxLevels) {
+            alert("恭喜你！通关了所有关卡！你是真正的打字大师！");
+            this.level = 1;
+        }
+        this.startLevel();
+    }
+
+    restartGame() {
+        this.level = 1;
+        this.startLevel();
+    }
+
+    handleKeyDown(e) {
+        if (!this.isRunning) return;
+        
+        const key = e.key.toUpperCase();
+        
+        // 忽略非字母键
+        if (!/^[A-Z]$/.test(key)) return;
+
+        // 视觉反馈：记录按键
+        this.pressedKeys[key] = 10; // 持续10帧的高亮
+
+        // 逻辑判断：寻找匹配的字母
+        // 优先匹配最接近底部的字母
+        let targetIndex = -1;
+        let maxY = -1000;
+
+        for (let i = 0; i < this.letters.length; i++) {
+            if (this.letters[i].char === key && !this.letters[i].isExploding) {
+                if (this.letters[i].y > maxY) {
+                    maxY = this.letters[i].y;
+                    targetIndex = i;
+                }
+            }
+        }
+
+        this.levelData.totalAttempts++;
+
+        if (targetIndex !== -1) {
+            // 击中
+            this.createExplosion(this.letters[targetIndex].x, this.letters[targetIndex].y, CONFIG.hitColor);
+            this.letters.splice(targetIndex, 1);
+            this.levelData.score++;
+            this.updateHUD();
+            
+            // 检查关卡结束
+            if (this.levelData.score >= CONFIG.keysPerLevel) {
+                this.endLevel(true);
+            }
+        } else {
+            // 空挥 (可选：是否惩罚？这里暂时不惩罚，只统计准确率)
+        }
+    }
+
+    handleKeyUp(e) {
+        // 可以在这里处理松开逻辑，目前主要靠帧计数控制高亮时长
+    }
+
+    createExplosion(x, y, color) {
+        for (let i = 0; i < 15; i++) {
+            this.particles.push(new Particle(x, y, color));
+        }
+    }
+
+    updateHUD() {
+        document.getElementById('hud-level').innerText = `Level: ${this.level}`;
+        document.getElementById('hud-score').innerText = `Score: ${this.levelData.score}/${CONFIG.keysPerLevel}`;
+        document.getElementById('hud-missed').innerText = `Missed: ${this.levelData.missed}`;
+    }
+
+    endLevel(success) {
+        this.isRunning = false;
+        cancelAnimationFrame(this.animationId);
+        
+        const accuracy = this.levelData.totalAttempts > 0 
+            ? Math.round((this.levelData.score / this.levelData.totalAttempts) * 100) 
+            : 0;
+            
+        const accuracyEl = success ? document.getElementById('level-accuracy') : document.getElementById('final-accuracy');
+        accuracyEl.innerText = `${accuracy}%`;
+        
+        if (success) {
+            if (accuracy >= 90) {
+                document.getElementById('level-message').innerText = `准确率 ${accuracy}% > 90%，通过！`;
+                document.getElementById('next-level-btn').style.display = 'block';
+                document.getElementById('level-end-screen').classList.remove('hidden');
+            } else {
+                // 虽然打满了数量，但准确率不够
+                document.getElementById('level-message').innerText = `准确率 ${accuracy}% < 90%，挑战失败。`;
+                document.getElementById('next-level-btn').style.display = 'none';
+                // 显示重玩按钮而不是下一关
+                const btn = document.querySelector('#level-end-screen button');
+                btn.innerText = "重试本关";
+                btn.onclick = () => this.startLevel(); // 覆盖默认行为
+                document.getElementById('level-end-screen').classList.remove('hidden');
+            }
+        } else {
+            // 这里是因漏掉太多而提前结束的逻辑（如果有的话），目前逻辑是必须打满100个才结束
+            // 如果需要中途失败逻辑，可以在update中检查missed数量
+        }
+    }
+    
+    checkGameOverByMisses() {
+        // 可选规则：如果漏掉超过一定数量直接失败
+        // 目前需求是“打满100个视为一关”，所以主要依靠结束时的准确率判定
+    }
+
+    loop() {
+        if (!this.isRunning) return;
+
+        this.ctx.clearRect(0, 0, CONFIG.canvasWidth, CONFIG.canvasHeight);
+        
+        // 1. 生成新字母
+        this.spawnTimer++;
+        if (this.spawnTimer > this.levelData.spawnInterval) {
+            const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            const randomChar = chars[Math.floor(Math.random() * chars.length)];
+            this.letters.push(new FallingLetter(randomChar, this.levelData.speed));
+            this.spawnTimer = 0;
+        }
+
+        // 2. 更新和绘制字母
+        for (let i = this.letters.length - 1; i >= 0; i--) {
+            const letter = this.letters[i];
+            letter.update();
+            letter.draw(this.ctx);
+
+            // 检查是否触底
+            // 键盘区域大概在 y=450 到 600 之间
+            if (letter.y > CONFIG.canvasHeight - 160) {
+                // 爆炸效果
+                this.createExplosion(letter.x, letter.y, CONFIG.warningColor);
+                this.letters.splice(i, 1);
+                this.levelData.missed++;
+                this.updateHUD();
+                
+                // 可选：如果漏掉太多直接结束
+                // if (this.levelData.missed > 20) this.endLevel(false);
+            }
+        }
+
+        // 3. 更新和绘制粒子
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.update();
+            p.draw(this.ctx);
+            if (p.life <= 0) {
+                this.particles.splice(i, 1);
+            }
+        }
+
+        // 4. 绘制虚拟键盘
+        this.drawKeyboard();
+
+        this.animationId = requestAnimationFrame(() => this.loop());
+    }
+
+    drawKeyboard() {
+        const keyWidth = 50;
+        const keyHeight = 50;
+        const gap = 10;
+        const startX = (CONFIG.canvasWidth - (10 * (keyWidth + gap))) / 2 + gap/2; // 居中
+        const startY = CONFIG.canvasHeight - 140;
+
+        this.ctx.font = "bold 20px Arial";
+        this.ctx.textAlign = "center";
+        this.ctx.textBaseline = "middle";
+
+        KEYBOARD_LAYOUT.forEach((row, rowIndex) => {
+            // 每一行稍微缩进一点以模拟真实键盘，或者简单居中
+            const rowWidth = row.length * (keyWidth + gap);
+            const rowStartX = (CONFIG.canvasWidth - rowWidth) / 2 + gap/2;
+
+            row.forEach((char, colIndex) => {
+                const x = rowStartX + colIndex * (keyWidth + gap);
+                const y = startY + rowIndex * (keyHeight + gap);
+
+                // 确定颜色
+                let bgColor = "#333";
+                let textColor = "#fff";
+                let borderColor = "#555";
+
+                // 检查是否被按下
+                if (this.pressedKeys[char]) {
+                    bgColor = CONFIG.keyPressColor;
+                    textColor = "#000";
+                    this.pressedKeys[char]--; // 减少持续时间
+                    if (this.pressedKeys[char] <= 0) delete this.pressedKeys[char];
+                }
+
+                // 绘制键帽
+                this.ctx.fillStyle = bgColor;
+                this.ctx.strokeStyle = borderColor;
+                this.ctx.lineWidth = 2;
+                
+                // 圆角矩形
+                this.roundRect(x, y, keyWidth, keyHeight, 8, true, true);
+
+                // 绘制字符
+                this.ctx.fillStyle = textColor;
+                this.ctx.fillText(char, x + keyWidth / 2, y + keyHeight / 2);
+            });
+        });
+    }
+
+    // 辅助函数：绘制圆角矩形
+    roundRect(x, y, w, h, r, fill, stroke) {
+        this.ctx.beginPath();
+        this.ctx.moveTo(x + r, y);
+        this.ctx.lineTo(x + w - r, y);
+        this.ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        this.ctx.lineTo(x + w, y + h - r);
+        this.ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        this.ctx.lineTo(x + r, y + h);
+        this.ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        this.ctx.lineTo(x, y + r);
+        this.ctx.quadraticCurveTo(x, y, x + r, y);
+        this.ctx.closePath();
+        if (fill) this.ctx.fill();
+        if (stroke) this.ctx.stroke();
+    }
+    
+    drawBackground() {
+        this.ctx.fillStyle = "#16213e";
+        this.ctx.fillRect(0, 0, CONFIG.canvasWidth, CONFIG.canvasHeight);
+    }
+}
+
+// 初始化游戏
+const game = new Game();
+
+</script>
+</body>
+</html>
